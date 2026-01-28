@@ -281,18 +281,6 @@ CopyLoop:
                 strlt       r0, [r2], #4
                 blt         CopyLoop
 
-CopyRamCode:
-                ldr         r1, =_siram_code    /* Load Address (LMA in Flash) */
-                ldr         r2, =_sram_code     /* Start Address (VMA in SRAMH) */
-                ldr         r3, =_eram_code     /* End Address (VMA in SRAMH) */
-CopyRamCodeLoop:
-                cmp         r2, r3
-                ittt        lt
-                ldrlt       r0, [r1], #4        /* 读取 Flash */
-                strlt       r0, [r2], #4        /* 写入 SRAMH */
-                blt         CopyRamCodeLoop
-
-
 CopyData1:
                 ldr         r1, =__etext_ret_ram
                 ldr         r2, =__data_start_ret_ram__
