@@ -1,0 +1,42 @@
+cmake-build-*/
+.idea/
+
+
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+
+# ==========================
+# Compiled Object files & Artifacts
+# ==========================
+*.o
+*.obj
+*.res
+*.tlog
+
+# Static and Dynamic Libraries
+*.lib
+*.a
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# ==========================
+# OS Specific (Optional but recommended)
+# ==========================
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db

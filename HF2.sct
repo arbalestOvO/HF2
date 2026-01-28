@@ -1,0 +1,30 @@
+; HC32F460 High-End Fan: eMMC + SRAMH Code Execution
+
+LR_IROM1 0x00000000 0x00080000  {    ; Flash
+  ER_IROM1 0x00000000 0x00080000  {  ; 普通代码
+   *.o (RESET, +First)
+   *(InRoot$$Sections)
+   .ANY (+RO)
+   .ANY (+XO)
+  }
+
+  ; --- SRAMH (32KB): 极速代码区 (RamFunc) ---
+  ; 这里的代码会在启动时从 Flash 复制到 SRAMH
+  ; 专门存放电机控制、中断处理等"保命"代码
+  RW_IRAM_CODE 0x1FFF0000 0x00008000  {
+   *.o (SECTION_RAM_CODE)
+   motor_ctrl.o (+RO) ; 强制将电机控制文件的代码段放这里
+   hall_sensor.o (+RO)
+  }
+
+  ; --- SRAM1 (64KB): 系统与堆 ---
+  RW_IRAM1 0x1FFF8000 0x00010000  {
+   .ANY (+RW +ZI)
+  }
+
+  ; --- SRAM2 (64KB): 纯数据 DMA 区 ---
+  ; eMMC 读取缓冲，LED 发送缓冲
+  RW_IRAM2 0x20000000 0x00010000  {
+   *.o (SECTION_DMA_BUF)
+  }
+}
