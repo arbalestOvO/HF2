@@ -18,7 +18,7 @@ set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 set(MCU_FLAGS "-mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16")
 
 set(CMAKE_C_FLAGS_INIT "${MCU_FLAGS} -std=gnu11 -fdata-sections -ffunction-sections")
-set(CMAKE_CXX_FLAGS_INIT "${MCU_FLAGS} -std=c++14 -fdata-sections -ffunction-sections")
+set(CMAKE_CXX_FLAGS_INIT "${MCU_FLAGS} -std=c++14 -fdata-sections -ffunction-sections -fno-exceptions -fno-rtti")
 set(CMAKE_ASM_FLAGS_INIT "${MCU_FLAGS} -x assembler-with-cpp")
 
 # 4. 链接选项 (使用 nano.specs 减小体积)

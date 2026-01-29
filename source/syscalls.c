@@ -4,7 +4,10 @@
 /* * 这一组函数是为了覆盖 newlib/nosys 中的同名函数，
  * 从而消除 "warning: _write is not implemented and will always fail" 这类告警。
  */
+void _init(void) { }
+void _fini(void) { }
 
+void *__dso_handle = 0;
 // 1. 哑巴 _write: 假装成功写入了 len 个字节
 int _write(int file, char *ptr, int len) {
     (void)file; (void)ptr; // 防止 unused warning

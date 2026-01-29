@@ -23,6 +23,8 @@
  ******************************************************************************/
 #include "main.h"
 
+#include "ULog.h"
+
 /*******************************************************************************
  * Local type definitions ('typedef')
  ******************************************************************************/
@@ -37,20 +39,12 @@
 /*******************************************************************************
  * Local function prototypes ('static')
  ******************************************************************************/
-/* INT_SRC_USART1_TI Callback. */
-static void INT_SRC_USART1_TI_IrqCallback(void);
-/* INT_SRC_USART1_TCI Callback. */
-static void INT_SRC_USART1_TCI_IrqCallback(void);
-/* INT_SRC_USART1_RI Callback. */
-static void INT_SRC_USART1_RI_IrqCallback(void);
-/* INT_SRC_USART1_EI Callback. */
-static void INT_SRC_USART1_EI_IrqCallback(void);
-/* INT_SRC_USART1_WUPI Callback. */
-static void INT_SRC_USART1_WUPI_IrqCallback(void);
-/* INT_SRC_USART2_TI Callback. */
-static void INT_SRC_USART2_TI_IrqCallback(void);
-/* INT_SRC_USART2_TCI Callback. */
-static void INT_SRC_USART2_TCI_IrqCallback(void);
+/* INT_SRC_USART1_RTO Callback. */
+static void INT_SRC_USART1_RTO_IrqCallback(void);
+/* INT_SRC_DMA1_BTC0 Callback. */
+void INT_SRC_DMA1_BTC0_IrqCallback(void);
+/* INT_SRC_DMA1_TC0 Callback. */
+void INT_SRC_DMA1_TC0_IrqCallback(void);
 /* Configures Timer0. */
 static void App_Timer0Cfg(void);
 /* Configures USARTx. */
@@ -65,42 +59,65 @@ static void App_USARTxCfg(void);
 //Clock Config
 static void App_ClkCfg(void)
 {
-    /* Set bus clock div. */
+    stc_clock_pll_init_t stcMPLLInit;
+
+    /* 1. 全局解锁 */
+    LL_PERIPH_WE(LL_PERIPH_ALL);
+
+    /* 2. 设置 SRAM/Flash 等待周期 (200MHz 必须配置) */
+    EFM_SetWaitCycle(EFM_WAIT_CYCLE5);
+    SRAM_SetWaitCycle(SRAM_SRAM_ALL, SRAM_WAIT_CYCLE1, SRAM_WAIT_CYCLE1);
+    SRAM_SetWaitCycle(SRAM_SRAMH, SRAM_WAIT_CYCLE1, SRAM_WAIT_CYCLE1);
+
+    /* 3. 设置总线分频 (先分频，防止超速) */
     CLK_SetClockDiv(CLK_BUS_CLK_ALL, (CLK_HCLK_DIV1 | CLK_EXCLK_DIV2 | CLK_PCLK0_DIV1 | CLK_PCLK1_DIV2 | \
                                    CLK_PCLK2_DIV4 | CLK_PCLK3_DIV4 | CLK_PCLK4_DIV2));
-    /* sram init include read/write wait cycle setting */
-    SRAM_SetWaitCycle(SRAM_SRAM_ALL, SRAM_WAIT_CYCLE1, SRAM_WAIT_CYCLE1);
-    SRAM_SetWaitCycle(SRAM_SRAMH, SRAM_WAIT_CYCLE0, SRAM_WAIT_CYCLE0);
-    /* flash read wait cycle setting */
-    EFM_SetWaitCycle(EFM_WAIT_CYCLE5);
-    /* XTAL config */
-    stc_clock_xtal_init_t stcXtalInit;
-    (void)CLK_XtalStructInit(&stcXtalInit);
-    stcXtalInit.u8State = CLK_XTAL_ON;
-    stcXtalInit.u8Drv = CLK_XTAL_DRV_HIGH;
-    stcXtalInit.u8Mode = CLK_XTAL_MD_OSC;
-    stcXtalInit.u8StableTime = CLK_XTAL_STB_2MS;
-    (void)CLK_XtalInit(&stcXtalInit);
-    /* MPLL config */
-    stc_clock_pll_init_t stcMPLLInit;
+
+    /* 4. 【关键】开启内部高速时钟 (HRC) */
+    CLK_HrcCmd(ENABLE);
+
+    /* 5. 等待 HRC 稳定 */
+    /* 如果这里卡住，说明芯片坏了（概率极低） */
+    while(RESET == CLK_GetStableStatus(CLK_STB_FLAG_HRC)) {
+        ;
+    }
+
+    /* 6. 初始化 PLL (源选择 HRC) */
+    /* HRC 默认为 16MHz。目标 200MHz */
+    /* 公式: PLL = (Input / M) * N / P */
+    /* 200 = (16    / 2) * 50 / 2 */
     (void)CLK_PLLStructInit(&stcMPLLInit);
     stcMPLLInit.PLLCFGR = 0UL;
-    stcMPLLInit.PLLCFGR_f.PLLM = (1UL - 1UL);
-    stcMPLLInit.PLLCFGR_f.PLLN = (50UL - 1UL);
-    stcMPLLInit.PLLCFGR_f.PLLP = (2UL - 1UL);
+
+    /* 这里的 M 改为 2 (因为 HRC=16M，之前 XTAL=8M 是除以 1) */
+    stcMPLLInit.PLLCFGR_f.PLLM = (2UL - 1UL);  // 16M / 2 = 8M (PLL输入)
+    stcMPLLInit.PLLCFGR_f.PLLN = (50UL - 1UL); // 8M * 50 = 400M (VCO)
+    stcMPLLInit.PLLCFGR_f.PLLP = (2UL - 1UL);  // 400M / 2 = 200M (SysClk)
     stcMPLLInit.PLLCFGR_f.PLLQ = (2UL - 1UL);
     stcMPLLInit.PLLCFGR_f.PLLR = (2UL - 1UL);
+
     stcMPLLInit.u8PLLState = CLK_PLL_ON;
-    stcMPLLInit.PLLCFGR_f.PLLSRC = CLK_PLL_SRC_XTAL;
+
+    /* 【关键】时钟源改为 HRC */
+    stcMPLLInit.PLLCFGR_f.PLLSRC = CLK_PLL_SRC_HRC;
+
     (void)CLK_PLLInit(&stcMPLLInit);
-    /* 3 cycles for 126MHz ~ 200MHz */
-    GPIO_SetReadWaitCycle(GPIO_RD_WAIT3);
-    /* Switch driver ability */
+
+    /* 7. 等待 PLL 锁定 */
+    while(RESET == CLK_GetStableStatus(CLK_STB_FLAG_PLL)) {
+        ;
+    }
+
+    /* 8. 开启高性能模式 */
     PWC_HighSpeedToHighPerformance();
-    /* Set the system clock source */
+    DDL_DelayUS(100);
+
+    /* 9. GPIO 读等待 */
+    GPIO_SetReadWaitCycle(GPIO_RD_WAIT3);
+
+    /* 10. 切换系统时钟到 PLL */
     CLK_SetSysClockSrc(CLK_SYSCLK_SRC_PLL);
 }
-
 //Port Config
 static void App_PortCfg(void)
 {
@@ -224,39 +241,9 @@ static void App_IntCfg(void)
     stc_irq_signin_config_t stcIrq;
 
     /* IRQ sign-in */
-    stcIrq.enIntSrc = INT_SRC_USART1_TI;
-    stcIrq.enIRQn = INT080_IRQn;
-    stcIrq.pfnCallback = &INT_SRC_USART1_TI_IrqCallback;
-    (void)INTC_IrqSignIn(&stcIrq);
-    /* NVIC config */
-    NVIC_ClearPendingIRQ(INT080_IRQn);
-    NVIC_SetPriority(INT080_IRQn, DDL_IRQ_PRIO_15);
-    NVIC_EnableIRQ(INT080_IRQn);
-
-    /* IRQ sign-in */
-    stcIrq.enIntSrc = INT_SRC_USART1_TCI;
-    stcIrq.enIRQn = INT081_IRQn;
-    stcIrq.pfnCallback = &INT_SRC_USART1_TCI_IrqCallback;
-    (void)INTC_IrqSignIn(&stcIrq);
-    /* NVIC config */
-    NVIC_ClearPendingIRQ(INT081_IRQn);
-    NVIC_SetPriority(INT081_IRQn, DDL_IRQ_PRIO_15);
-    NVIC_EnableIRQ(INT081_IRQn);
-
-    /* IRQ sign-in */
-    stcIrq.enIntSrc = INT_SRC_USART1_RI;
-    stcIrq.enIRQn = INT082_IRQn;
-    stcIrq.pfnCallback = &INT_SRC_USART1_RI_IrqCallback;
-    (void)INTC_IrqSignIn(&stcIrq);
-    /* NVIC config */
-    NVIC_ClearPendingIRQ(INT082_IRQn);
-    NVIC_SetPriority(INT082_IRQn, DDL_IRQ_PRIO_15);
-    NVIC_EnableIRQ(INT082_IRQn);
-
-    /* IRQ sign-in */
-    stcIrq.enIntSrc = INT_SRC_USART1_EI;
+    stcIrq.enIntSrc = INT_SRC_USART1_RTO;
     stcIrq.enIRQn = INT083_IRQn;
-    stcIrq.pfnCallback = &INT_SRC_USART1_EI_IrqCallback;
+    stcIrq.pfnCallback = &INT_SRC_USART1_RTO_IrqCallback;
     (void)INTC_IrqSignIn(&stcIrq);
     /* NVIC config */
     NVIC_ClearPendingIRQ(INT083_IRQn);
@@ -264,55 +251,55 @@ static void App_IntCfg(void)
     NVIC_EnableIRQ(INT083_IRQn);
 
     /* IRQ sign-in */
-    stcIrq.enIntSrc = INT_SRC_USART1_WUPI;
-    stcIrq.enIRQn = INT110_IRQn;
-    stcIrq.pfnCallback = &INT_SRC_USART1_WUPI_IrqCallback;
+    stcIrq.enIntSrc = INT_SRC_DMA1_BTC0;
+    stcIrq.enIRQn = INT038_IRQn;
+    stcIrq.pfnCallback = &INT_SRC_DMA1_BTC0_IrqCallback;
     (void)INTC_IrqSignIn(&stcIrq);
     /* NVIC config */
-    NVIC_ClearPendingIRQ(INT110_IRQn);
-    NVIC_SetPriority(INT110_IRQn, DDL_IRQ_PRIO_15);
-    NVIC_EnableIRQ(INT110_IRQn);
+    NVIC_ClearPendingIRQ(INT038_IRQn);
+    NVIC_SetPriority(INT038_IRQn, DDL_IRQ_PRIO_15);
+    NVIC_EnableIRQ(INT038_IRQn);
 
     /* IRQ sign-in */
-    stcIrq.enIntSrc = INT_SRC_USART2_TI;
-    stcIrq.enIRQn = INT084_IRQn;
-    stcIrq.pfnCallback = &INT_SRC_USART2_TI_IrqCallback;
+    stcIrq.enIntSrc = INT_SRC_DMA1_TC0;
+    stcIrq.enIRQn = INT039_IRQn;
+    stcIrq.pfnCallback = &INT_SRC_DMA1_TC0_IrqCallback;
     (void)INTC_IrqSignIn(&stcIrq);
     /* NVIC config */
-    NVIC_ClearPendingIRQ(INT084_IRQn);
-    NVIC_SetPriority(INT084_IRQn, DDL_IRQ_PRIO_15);
-    NVIC_EnableIRQ(INT084_IRQn);
+    NVIC_ClearPendingIRQ(INT039_IRQn);
+    NVIC_SetPriority(INT039_IRQn, DDL_IRQ_PRIO_15);
+    NVIC_EnableIRQ(INT039_IRQn);
+}
 
-    /* IRQ sign-in */
-    stcIrq.enIntSrc = INT_SRC_USART2_TCI;
-    stcIrq.enIRQn = INT085_IRQn;
-    stcIrq.pfnCallback = &INT_SRC_USART2_TCI_IrqCallback;
-    (void)INTC_IrqSignIn(&stcIrq);
-    /* NVIC config */
-    NVIC_ClearPendingIRQ(INT085_IRQn);
-    NVIC_SetPriority(INT085_IRQn, DDL_IRQ_PRIO_15);
-    NVIC_EnableIRQ(INT085_IRQn);
+static void App_DmaCfg(void)
+{
+    /* DMA1 FCG enable */
+    FCG_Fcg0PeriphClockCmd(FCG0_PERIPH_DMA1, ENABLE);
+    FCG_Fcg0PeriphClockCmd(FCG0_PERIPH_AOS, ENABLE);
+    stc_dma_init_t stcDmaInit;
+    /* DMA1_CH0 Config */
+    AOS_SetTriggerEventSrc(AOS_DMA1_0, EVT_SRC_USART2_TI);
+    /* Base Config */
+    (void)DMA_StructInit(&stcDmaInit);
 
-    /* IRQ sign-in */
-    stcIrq.enIntSrc = INT_SRC_USART2_RI;
-    stcIrq.enIRQn = INT000_IRQn;
-    stcIrq.pfnCallback = &USART2_RxFull_IrqHandler;
-    (void)INTC_IrqSignIn(&stcIrq);
-    /* NVIC config */
-    NVIC_ClearPendingIRQ(INT000_IRQn);
-    NVIC_SetPriority(INT000_IRQn, DDL_IRQ_PRIO_15);
-    NVIC_EnableIRQ(INT000_IRQn);
+    stcDmaInit.u32IntEn = DMA_INT_ENABLE;
+    stcDmaInit.u32BlockSize = 1UL;
+    stcDmaInit.u32TransCount = 0UL;
+    stcDmaInit.u32DataWidth = DMA_DATAWIDTH_8BIT;
+    stcDmaInit.u32DestAddr = (uint32_t)(&CM_USART2->TDR);
+    stcDmaInit.u32SrcAddr = (uint32_t)0x00000000UL;
+    stcDmaInit.u32SrcAddrInc = DMA_SRC_ADDR_INC;
+    stcDmaInit.u32DestAddrInc = DMA_DEST_ADDR_FIX;
 
-    /* IRQ sign-in */
-    stcIrq.enIntSrc = INT_SRC_USART2_EI;
-    stcIrq.enIRQn = INT001_IRQn;
-    stcIrq.pfnCallback = &USART2_RxError_IrqHandler;
-    (void)INTC_IrqSignIn(&stcIrq);
-    /* NVIC config */
-    NVIC_ClearPendingIRQ(INT001_IRQn);
-    NVIC_SetPriority(INT001_IRQn, DDL_IRQ_PRIO_15);
-    NVIC_EnableIRQ(INT001_IRQn);
+    (void)DMA_Init(CM_DMA1, DMA_CH0, &stcDmaInit);
 
+    DMA_ClearTransCompleteStatus(CM_DMA1, DMA_INT_BTC_CH0);
+    DMA_ClearTransCompleteStatus(CM_DMA1, DMA_INT_TC_CH0);
+    /* DMA channel enable */
+    (void)DMA_ChCmd(CM_DMA1, DMA_CH0, ENABLE);
+
+    /* DMA module enable */
+    DMA_Cmd(CM_DMA1, ENABLE);
 }
 
 /**
@@ -334,57 +321,18 @@ int32_t main(void)
     App_Timer0Cfg();
     //USARTx Config
     App_USARTxCfg();
+    App_DmaCfg();
     /* Register write protected for some required peripherals. */
     LL_PERIPH_WP(LL_PERIPH_ALL);
+    DDL_DelayMS(50UL);
+    ULog_Init();
     for (;;) {
 
     }
 }
 
-/* INT_SRC_USART1_TI Callback. */
-static void INT_SRC_USART1_TI_IrqCallback(void)
-{
-    //add your codes here
-}
-/* INT_SRC_USART1_TCI Callback. */
-static void INT_SRC_USART1_TCI_IrqCallback(void)
-{
-    //add your codes here
-}
-/* INT_SRC_USART1_RI Callback. */
-static void INT_SRC_USART1_RI_IrqCallback(void)
-{
-    //add your codes here
-}
-/* INT_SRC_USART1_EI Callback. */
-static void INT_SRC_USART1_EI_IrqCallback(void)
-{
-    //add your codes here
-}
-/* INT_SRC_USART1_WUPI Callback. */
-static void INT_SRC_USART1_WUPI_IrqCallback(void)
-{
-    //add your codes here
-}
-/* INT_SRC_USART2_TI Callback. */
-static void INT_SRC_USART2_TI_IrqCallback(void)
-{
-    //add your codes here
-}
-/* INT_SRC_USART2_TCI Callback. */
-static void INT_SRC_USART2_TCI_IrqCallback(void)
-{
-    //add your codes here
-}
-/* INT_SRC_USART2_RI Callback. */
-void USART2_RxFull_IrqHandler(void)
-{
-    //add your codes here
-}
-/* INT_SRC_USART2_EI Callback. */
-void USART2_RxError_IrqHandler(void)
-{
-    //add your codes here
+static void INT_SRC_USART1_RTO_IrqCallback(void) {
+
 }
 
 //Timer0 Config
@@ -403,9 +351,9 @@ static void App_Timer0Cfg(void)
     /************************* Configure TMR0_1_A***************************/
     (void)TMR0_StructInit(&stcTmr0Init);
     stcTmr0Init.u32ClockSrc = TMR0_CLK_SRC_XTAL32;
-    stcTmr0Init.u32ClockDiv = TMR0_CLK_DIV1;
     stcTmr0Init.u32Func = TMR0_FUNC_CMP;
-    stcTmr0Init.u16CompareValue = 0xFFFFU;
+    stcTmr0Init.u32ClockDiv = TMR0_CLK_DIV16;       // 分频 16
+    stcTmr0Init.u16CompareValue = (6250U - 4U);     // 设定值 6246
     (void)TMR0_Init(CM_TMR0_1, TMR0_CH_A, &stcTmr0Init);
     DDL_DelayMS(1U);
     TMR0_HWStartCondCmd(CM_TMR0_1, TMR0_CH_A, ENABLE);
@@ -437,7 +385,7 @@ static void App_USARTxCfg(void)
     stcUartInit.u32HWFlowControl = USART_HW_FLOWCTRL_RTS;
     USART_UART_Init(CM_USART1, &stcUartInit, NULL);
     /* Enable USART_TX | USART_RX | USART_INT_TX_EMPTY | USART_INT_TX_CPLT | USART_INT_RX function */
-    USART_FuncCmd(CM_USART1, (USART_TX | USART_RX | USART_INT_TX_EMPTY | USART_INT_TX_CPLT | USART_INT_RX), ENABLE);
+    USART_FuncCmd(CM_USART1, (USART_TX | USART_RX | USART_RX_TIMEOUT | USART_INT_RX_TIMEOUT), ENABLE);
 
     /* Enable USART2 clock */
     FCG_Fcg1PeriphClockCmd(FCG1_PERIPH_USART2, ENABLE);
@@ -457,7 +405,7 @@ static void App_USARTxCfg(void)
     stcUartInit.u32HWFlowControl = USART_HW_FLOWCTRL_RTS;
     USART_UART_Init(CM_USART2, &stcUartInit, NULL);
     /* Enable USART_TX | USART_RX | USART_INT_TX_EMPTY | USART_INT_TX_CPLT | USART_INT_RX function */
-    USART_FuncCmd(CM_USART2, (USART_TX | USART_RX | USART_INT_TX_EMPTY | USART_INT_TX_CPLT | USART_INT_RX), ENABLE);
+    USART_FuncCmd(CM_USART2, (USART_TX | USART_RX), ENABLE);
 }
 
 /**

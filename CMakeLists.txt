@@ -66,7 +66,7 @@ target_include_directories(tjpgdec PRIVATE config)
 add_compile_definitions(__DEBUG)
 add_compile_definitions(HC32F460)
 add_compile_definitions(USE_DDL_DRIVER)
-# 移除 -D__CLANG_ARM，GCC 会自动定义 __GNUC__
+
 
 # --- Include Paths ---
 include_directories("${CMAKE_SOURCE_DIR}/common")
@@ -79,9 +79,6 @@ set(STARTUP_FILE "${CMAKE_SOURCE_DIR}/startup_hc32f460.S")
 set(SOURCES
         ${STARTUP_FILE}
         "${CMAKE_SOURCE_DIR}/common/system_hc32f460.c"
-        "${CMAKE_SOURCE_DIR}/source/main.c"
-        source/ring_buffer.c
-        source/syscalls.c
 )
 
 file(GLOB DRIVER_SOURCES "${CMAKE_SOURCE_DIR}/driver/src/*.c")
@@ -105,6 +102,7 @@ target_link_options(HF2_Debug PRIVATE
         -lm
         -Wl,--end-group
         -Wl,--no-warn-rwx-segments
+        -nostartfiles
 )
 
 # --- Post Build (Converted from fromelf to objcopy/size) ---
